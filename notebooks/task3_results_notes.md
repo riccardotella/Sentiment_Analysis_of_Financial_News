@@ -117,3 +117,31 @@ Report sentence:
 "TF-IDF degraded Naive Bayes (macro-F1 0.66->0.45, negative recall ->0.06) but left the
 neural network essentially unaffected (0.67->0.65), showing that representation effects
 interact with the classifier rather than being absolute."
+
+## BINARY vs MULTICLASS (drop neutral, pos vs neg only)
+
+Binary dataset: 1967 rows (pos 1363 / neg 604). Balance pos 69% / neg 31% — the minority
+class (negative) goes from 12% (3-class) to 31% (binary), i.e. far less extreme imbalance.
+
+| | Multiclass | Binary | delta |
+|---|---|---|---|
+| NB macro-F1 | 0.66 | 0.81 | +0.15 |
+| NN macro-F1 | 0.67 | 0.83 | +0.16 |
+| NB negative recall | 0.53 | 0.70 | +0.17 |
+| NN negative recall | 0.57 | 0.74 | +0.17 |
+| accuracy | 0.72 | 0.84–0.86 | up |
+
+### The insight (NOT just "binary is better")
+The difficulty was NEVER positive-vs-negative — it was separating SENTIMENT FROM NEUTRALITY.
+Every error category in the error analysis was "X misread as neutral". Removing neutral
+deletes exactly that failure mode; the leftover task (pos vs neg) is the one BoW was already
+good at (the confusion matrix showed pos<->neg were rarely confused directly).
+=> The ~0.15 macro-F1 gain QUANTIFIES how much of the multiclass difficulty came from the
+neutral class alone. Binary removes the hard part, not the easy part.
+
+NB-vs-NN behaviour persists: NN barely beats NB again (0.83 vs 0.81), reinforcing that
+word presence is nearly sufficient for this data.
+
+NOTE: binary numbers are not directly comparable to multiclass as raw values (random
+baseline is 50% binary vs 33% 3-class). The meaningful comparison is RELATIVE: neg recall
+up, pos<->neg confusion shrinks.
