@@ -55,7 +55,39 @@ Report sentence:
 analysis — negation, implicit sentiment, and domain knowledge — confirming that
 contextual, pretrained representations capture sentiment that bag-of-words counting cannot."
 
-## TODO
-- Binary version (drop neutral, num_labels=2) + compare to Task 3 binary.
-- Computational cost note for report: classical models train in seconds on CPU;
-  DistilBERT needs a GPU (Colab T4) and ~minutes/epoch -> accuracy vs cost trade-off.
+## BINARY RESULTS (pos vs neg, num_labels=2)
+
+              precision    recall  f1-score   support
+    negative       0.91      0.95      0.93       121
+    positive       0.98      0.96      0.97       273
+    accuracy                           0.95       394
+    macro avg      0.94      0.95      0.95       394
+
+Confusion matrix (rows=true, cols=pred; order neg/pos):
+    [[115   6]
+     [ 12 261]]
+Only 18 errors / 394. Negative recall 0.95 (was 0.53 in Task 3 multiclass NB).
+
+Training curve: val macro-F1 = 0.939 (ep1) -> 0.950 (ep2) -> 0.947 (ep3). Converged within
+1-2 epochs; epoch 3 dipped slightly = mild overfitting onset -> 3 epochs is plenty / even
+slightly too many. Good report observation. Train runtime 61s on Colab T4 GPU (3 epochs).
+
+## FULL PROJECT RESULTS TABLE (every model, both settings) — macro-F1
+
+|              | multiclass | binary |
+|--------------|------------|--------|
+| NB + BoW     | 0.66       | 0.81   |
+| NN + BoW     | 0.67       | 0.83   |
+| DistilBERT   | 0.82       | 0.95   |
+
+Narrative: (1) removing neutral helps everyone (difficulty lived in neutrality);
+(2) the transformer helps everyone MORE, and most where classical models failed
+(minority recall, negation, implicit sentiment); (3) the two effects compound:
+binary + transformer = 0.95. The WHY is the Task 3 error analysis, confirmed.
+
+## COMPUTATIONAL COST (for the report)
+- NB: trains in <1s on CPU; fully interpretable.
+- NN (MLP): seconds on CPU.
+- DistilBERT: needs a GPU; ~61s for 3 epochs on Colab T4 (would be ~20+ min/epoch on CPU),
+  268MB model, ~67M params. Big accuracy gain but real compute + infra cost (GPU, no
+  interpretability). Classic accuracy-vs-cost / accuracy-vs-interpretability trade-off.
