@@ -1,0 +1,204 @@
+% =====================================================================
+% TASK 3 — SENTIMENT CLASSIFICATION
+% Paste this section into the main report (before Task 5, after the PMI
+% section). Requires: \usepackage{booktabs}, graphicx (already loaded).
+% Confusion-matrix figures are in results/task3_outputs/.
+% =====================================================================
+
+\section{Sentiment Classification}
+\label{sec:classification}
+
+This section builds classical classifiers for the sentiment task and
+analyses their behaviour. We train a Multinomial Naive Bayes (NB)
+classifier and a feed-forward neural network (a multilayer perceptron,
+MLP), each with two feature representations, and we study the effect of
+class imbalance, of dropping the neutral class, and of the typical
+errors. The aim, following the EDA, is not to maximise accuracy but to
+understand \emph{why} each modelling choice changes the results.
+
+\subsection{Setup}
+
+The dataset was split into 80\% training and 20\% test data with a
+stratified split (\texttt{random\_state=42}), which preserves the
+59/28/12 class proportions in both parts. Stratification is important
+here because the negative class is only 12\% of the data: a non-stratified
+split could place too few negatives in the test set and make the
+metrics unstable. All classical models use the \texttt{text\_stopwords}
+preprocessing variant. Features were built only from the training set
+(\texttt{fit} on train, \texttt{transform} on test) to avoid information
+leakage. We report accuracy, per-class precision/recall, macro-averaged
+F1, and confusion matrices; as argued in the EDA, macro-F1 is the
+primary metric because accuracy is dominated by the majority class.
+
+\subsection{Naive Bayes: Bag-of-Words vs.\ TF-IDF}
+
+We first compare two representations for Naive Bayes: bag-of-words
+counts (BoW) and TF-IDF. The training BoW matrix has 8733 features and
+is 99.9\% sparse, consistent with the short headlines and large
+vocabulary found in the EDA. Table~\ref{tab:nb-rep} reports the results.
+
+\begin{table}[t]
+\centering
+\caption{Naive Bayes with two representations and with a uniform prior.}
+\label{tab:nb-rep}
+\begin{tabular}{lccc}
+\toprule
+Configuration & Accuracy & Macro-F1 & Neg.\ recall \\
+\midrule
+NB + BoW                & 0.72 & 0.66 & 0.53 \\
+NB + TF-IDF             & 0.68 & 0.45 & 0.06 \\
+NB + BoW (uniform prior) & 0.68 & 0.64 & 0.63 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Counter to the common assumption that TF-IDF is a stronger
+representation, it \emph{degraded} Naive Bayes sharply: macro-F1 fell
+from 0.66 to 0.45 and the recall on the negative class collapsed to
+0.06. The mechanism is specific to NB. NB scores a class as the product
+of a class prior and per-word likelihoods. TF-IDF down-weighting
+flattens the word-likelihood signal, so the high prior of the neutral
+class (0.59) dominates and the model defaults to predicting neutral.
+This is a clear example of the EDA warning that accuracy can be
+misleading: accuracy moved only slightly (0.72 to 0.68), while macro-F1
+revealed that the model had effectively stopped predicting the minority
+classes.
+
+\subsection{Handling Class Imbalance}
+
+Because both representations showed the model collapsing toward the
+neutral majority, we tested an explicit imbalance correction. Naive
+Bayes has no \texttt{class\_weight} parameter, but setting
+\texttt{fit\_prior=False} replaces the data-estimated priors with a
+uniform prior, removing the majority-class advantage. With BoW
+(Table~\ref{tab:nb-rep}, last row), negative recall rose from 0.53 to
+0.63 and the three classes became markedly more balanced
+(all F1-scores between 0.57 and 0.77), at the cost of a small drop in
+accuracy (0.72 to 0.68). Macro-F1 itself barely changed (0.66 to 0.64),
+because the gain on the rare classes offset the loss on neutral. The
+value of this correction is therefore not a higher headline score but a
+model that no longer ignores the minority class.
+
+\subsection{Feed-forward Neural Network}
+
+We then trained an MLP (one hidden layer of 100 ReLU units, Adam,
+\texttt{max\_iter=200}, \texttt{random\_state=42}; roughly 876{,}000
+parameters) on the same representations. Table~\ref{tab:grid} places all
+four model$\times$representation combinations side by side.
+
+\begin{table}[t]
+\centering
+\caption{Macro-F1 for the full classifier $\times$ representation grid.}
+\label{tab:grid}
+\begin{tabular}{lcc}
+\toprule
+ & BoW & TF-IDF \\
+\midrule
+Naive Bayes      & 0.66 & 0.45 \\
+Neural network   & 0.67 & 0.65 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two findings stand out. First, with BoW the neural network only
+\emph{matched} Naive Bayes (macro-F1 0.67 vs.\ 0.66), despite its much
+larger capacity and its ability to model word interactions. This
+indicates that for these short headlines word \emph{presence} is nearly
+sufficient and word \emph{interactions} add little: knowing whether
+words such as \textit{loss}, \textit{profit}, or \textit{growth} are
+present already captures most of the signal. Second, and more
+interestingly, TF-IDF devastated Naive Bayes (0.45) but left the neural
+network almost unaffected (0.65; negative recall 0.54 vs.\ NB's 0.06).
+The reason is that the neural network has no class prior to be
+overwhelmed --- it learns its weights directly by gradient descent. This
+shows that representation effects are \emph{not absolute}: they interact
+with the classifier. A study that ran only NB with TF-IDF would have
+wrongly concluded that ``TF-IDF is worse''; running the full grid
+reveals that TF-IDF is worse \emph{for Naive Bayes specifically}.
+
+\subsection{Error Analysis}
+
+We examined the misclassified test examples of the best multiclass model
+(NN + BoW, 267 errors out of 970). The confusion matrices
+(Figure~\ref{fig:cm-nb}) show that errors are overwhelmingly
+confusions with the neutral class rather than polarity flips: positives
+and negatives are rarely confused with each other, but both are often
+predicted as neutral. The difficulty is therefore separating weak
+sentiment from neutral reporting, not telling positive from negative.
+
+Reading the most frequent error type --- true positives predicted as
+neutral --- reveals a consistent pattern: these headlines contain almost
+no overtly positive \emph{words}. We group the failures into four
+categories:
+
+\begin{itemize}
+  \item \textbf{Sentiment in events/numbers:} e.g.\ ``\textit{subscriptions
+  increase Cargotec's share capital\dots}'' or ``\textit{awarded a
+  significant order for 292 cranes}''. The signal is the financial event
+  (a capital increase, a won contract), not a sentiment word.
+  \item \textbf{Implicit/connotative:} e.g.\ ``\textit{moving to new
+  headquarters signifies the beginning of a new era}''. Positive by
+  implication, with no positive keywords.
+  \item \textbf{Negation / polarity reversal:} e.g.\ ``\textit{Stora
+  Enso\dots was \underline{acquitted} of charges of participating in a
+  price-fixing \underline{conspiracy}}''. The sentence is full of
+  negative words; \textit{acquitted} reverses them, but bag-of-words
+  ignores word order.
+  \item \textbf{Domain knowledge required:} e.g.\ being listed among
+  ``\textit{sustainable / pioneer companies}'' is an honour that requires
+  world knowledge to read as positive.
+\end{itemize}
+
+These categories are a direct consequence of the data properties found
+in the EDA --- short, domain-specific headlines where sentiment is often
+implicit --- and of the bag-of-words assumption that discards word order.
+They also motivate the transformer experiments in
+Section~\ref{sec:transformers}: each failure mode (word order for
+negation, world knowledge for events, context for connotation) is
+something a pretrained contextual model is designed to capture.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.49\linewidth]{../results/task3_outputs/Naive_Bayes___BoW.png}
+\includegraphics[width=0.49\linewidth]{../results/task3_outputs/Neural_Net___BoW.png}
+\caption{Confusion matrices (multiclass, BoW): Naive Bayes (left) and
+neural network (right). Both confuse positives and negatives with the
+neutral majority rather than with each other.}
+\Description{Two 3x3 confusion matrices showing most off-diagonal mass in the neutral column.}
+\label{fig:cm-nb}
+\end{figure}
+
+\subsection{Binary vs.\ Multiclass}
+
+Finally, we repeated the task in a binary setting by removing the neutral
+class (1967 headlines, positive 69\% / negative 31\%). Removing neutral
+also reduces the imbalance: the negative class rises from 12\% of the
+data to 31\%. Table~\ref{tab:binary} compares both settings.
+
+\begin{table}[t]
+\centering
+\caption{Macro-F1 in the multiclass and binary settings.}
+\label{tab:binary}
+\begin{tabular}{lcc}
+\toprule
+Model & Multiclass & Binary \\
+\midrule
+NB + BoW & 0.66 & 0.81 \\
+NN + BoW & 0.67 & 0.83 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both models improve substantially (macro-F1 about $+0.15$), and negative
+recall recovers strongly (NB 0.53 to 0.70, NN 0.57 to 0.74). The
+interpretation matters more than the numbers: every error category above
+was a confusion \emph{with neutral}, so deleting the neutral class
+removes precisely the dominant failure mode. What remains --- separating
+positive from negative --- is the part bag-of-words already handled well.
+The $\sim$0.15 gain therefore quantifies how much of the multiclass
+difficulty was due to the neutral class alone: the binary setting removes
+the hard part, not the easy part. The relative behaviour of the two
+models is unchanged (the neural network again only marginally beats Naive
+Bayes), confirming that for this dataset word presence is nearly
+sufficient and a simple, interpretable, instantly-trained Naive Bayes is
+a strong and arguably preferable baseline.
