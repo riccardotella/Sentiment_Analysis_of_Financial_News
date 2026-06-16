@@ -1,0 +1,396 @@
+\documentclass[sigconf,nonacm]{acmart}
+
+\settopmatter{
+  printacmref=false,
+  printccs=false,
+  printfolios=true
+}
+
+\setcopyright{none}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{tabularx}
+\usepackage{array}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\title{Sentiment Analysis of Financial News}
+
+\author{Riccardo Tellarini}
+\author{Vasileios Lalos}
+
+\begin{document}
+
+\begin{abstract}
+This report analyzes a financial news sentiment dataset by exploratory data analysis, both classical machine learning models and transformer-based models, and exploring PMI-based word similarity.
+The focus is also on understanding how preprocessing and model choice affect behavior and errors.
+\end{abstract}
+
+\maketitle
+
+
+\section{Introduction}
+
+This project performs sentiment analysis on financial news headlines from the \texttt{Sentences\_50Agree.txt} dataset, where each headline is labelled \textit{positive}, \textit{neutral}, or \textit{negative}. Following the task description, our aim is not to maximise classification accuracy but to understand how dataset properties, preprocessing, feature representations, and model choices shape model behaviour and errors. Three characteristics of the data guide the analysis: a strong class imbalance, the short and domain-specific nature of the headlines, and the importance of local financial expressions such as \textit{profit rose}, \textit{net loss}, or \textit{sales decreased}.
+
+We combine exploratory data analysis, domain-aware preprocessing, PMI-based word similarity, classical classifiers (Naive Bayes and a feed-forward network), and a fine-tuned transformer. A recurring theme is that the central difficulty is not separating positive from negative, but distinguishing genuine sentiment from neutral reporting --- a difficulty that the classical models expose through their errors and that the pretrained transformer largely resolves.
+
+The report is organised as follows. Section~\ref{sec:reproducibility} describes the setup and reproducibility. Sections~\ref{sec:eda}--\ref{sec:pmi} cover the exploratory analysis, preprocessing variants, and PMI similarity. Section~\ref{sec:classification} presents the classical classification experiments and error analysis, and Section~\ref{sec:transformers} the transformer fine-tuning and the comparison across all models.
+
+\section{Experimental Setup and Reproducibility}
+\label{sec:reproducibility}
+
+All experiments were performed using only the provided \texttt{Sentences\_50Agree.txt} file. The dataset was parsed by splitting each line at the last occurrence of the \texttt{@} symbol, obtaining the headline text and the sentiment label. No external dataset was used.
+
+The analysis was organized into separate notebooks corresponding to the project tasks. The exploratory analysis and preprocessing notebooks saved their outputs in the \texttt{results/} directory, including figures and preprocessed CSV files. Random procedures, such as the train/test split and the selection of target words for PMI similarity, used a fixed random seed equal to 42. This makes the reported results reproducible.
+
+For text processing, we used standard Python libraries such as \texttt{pandas}, \texttt{NLTK}, and \texttt{scikit-learn} for tokenization, stop-word lists, and feature extraction. However, the PMI matrix and the word similarity computation were implemented manually, without using packages that directly compute PMI or word embeddings. This follows the task requirement for the PMI-based similarity component.
+
+The main preprocessing output used by the classification tasks is a CSV file containing the original text, the label, and three processed text variants: \texttt{text\_light}, \texttt{text\_stopwords}, and \texttt{text\_stemming}. This ensures that the classification experiments can be reproduced from the same fixed preprocessing pipeline.
+
+\section{Exploratory Data Analysis}
+\label{sec:eda}
+
+\subsection{Dataset and Class Distribution}
+
+The dataset contains 4846 financial news headlines. Each headline is associated with one sentiment label. The class distribution is strongly imbalanced, as shown in Table~\ref{tab:class-dist}.
+
+\begin{table}[t]
+\centering
+\caption{Class distribution.}
+\label{tab:class-dist}
+\begin{tabular}{lrr}
+\toprule
+Class & Count & Percentage \\
+\midrule
+Neutral  & 2879 & 59.4\% \\
+Positive & 1363 & 28.1\% \\
+Negative & 604  & 12.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The dominance of the neutral class is important for evaluation. A majority-class baseline that always predicts \textit{neutral} would already achieve approximately 59\% accuracy. Therefore, accuracy alone is not sufficient. Macro-averaged precision, recall and F1-score are needed because they give equal importance to all classes, including the minority negative class.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/class_distribution.png}
+\caption{Sentiment class distribution.}
+\Description{Bar plot showing that neutral is the majority class, followed by positive and negative.}
+\label{fig:class-dist}
+\end{figure}
+
+\subsection{Text Length}
+
+The headlines are short. Using the tokenization adopted in the exploratory notebook, the mean headline length is about 25.2 tokens and the median is 23 tokens. The maximum length is 111 tokens, but most examples are much shorter. Short texts provide limited context, which makes the distinction between neutral and sentiment-bearing headlines difficult, especially when sentiment depends on financial interpretation. For instance, the word \textit{profit} is not necessarily positive: it becomes positive in expressions such as \textit{profit rose}, but negative in expressions such as \textit{profit fell} or \textit{profit decreased}.
+
+\subsection{Vocabulary and Sparsity}
+
+The corpus contains 122316 tokens and 10136 unique tokens in the exploratory tokenization. About 5113 words appear only once. This relatively large number of rare words suggests that bag-of-words and TF-IDF representations will be high-dimensional and sparse.
+
+\begin{table}[t]
+\centering
+\caption{Vocabulary statistics.}
+\label{tab:vocab}
+\begin{tabular}{lr}
+\toprule
+Property & Value \\
+\midrule
+Total tokens & 122316 \\
+Vocabulary size & 10136 \\
+Type-token ratio & 8.29\% \\
+Hapax legomena & 5113 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This sparsity is relevant for the later classification experiments, because classical models depend strongly on the quality of the extracted features. It is also relevant for PMI-based similarity, since rare co-occurrences can receive high PMI values and lead to unstable similarity results.
+
+\subsection{Frequent Words and Bigrams}
+
+The most frequent content words confirm the financial nature of the dataset. Frequent terms include \textit{EUR}, \textit{company}, \textit{said}, \textit{Finnish}, \textit{mn}, \textit{sales}, \textit{million}, \textit{net}, \textit{profit}, \textit{operating}, and \textit{market}. These words describe companies, monetary quantities, financial performance and business events.
+
+The bigram analysis is especially informative. Frequent bigrams include \textit{net sales}, \textit{EUR mn}, \textit{operating profit}, \textit{corresponding period}, \textit{net profit}, \textit{net loss}, and \textit{company said}. This suggests that local word combinations are more informative than isolated words. For example, \textit{profit} alone is ambiguous, while \textit{profit rose}, \textit{net loss}, or \textit{sales dropped} provide clearer sentiment cues. This motivates n-gram features in classical models and explains why error analysis should consider local expressions rather than only individual words.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/top_bigrams.png}
+\caption{Most frequent bigrams after stop-word removal.}
+\Description{Horizontal bar plot of frequent bigrams such as net sales, operating profit, and net profit.}
+\label{fig:bigrams}
+\end{figure}
+
+\subsection{Numbers and Financial Symbols}
+
+Financial headlines often contain numbers, percentages, currencies and monetary quantities. In our dataset, 53.3\% of headlines contain at least one number, 6.8\% contain a percentage pattern, and 19.8\% contain money-related terms or symbols. These elements were treated as potentially informative rather than as noise: expressions such as \textit{profit increased by 20\%}, \textit{sales decreased by 5\%}, or \textit{net loss narrowed to EUR ...} may carry important sentiment information.
+
+\subsection{Implications for Classification}
+
+The exploratory analysis suggests three main implications. First, the strong class imbalance means that macro-averaged metrics and confusion matrices are necessary, since accuracy may hide poor performance on the minority negative class. Second, the short length of the headlines makes the task sensitive to individual words and local phrases. Third, financial numbers, percentages, and monetary expressions should be preserved during preprocessing. Overall, the main challenge is not simply detecting positive or negative words, but interpreting short financial statements where sentiment is often implicit and domain-dependent.
+
+\section{Text Preprocessing}
+\label{sec:preprocessing}
+
+\subsection{Preprocessing Strategy}
+
+The preprocessing strategy was designed to be domain-aware. Instead of applying all possible preprocessing techniques, we defined three controlled variants with increasing levels of normalization, summarized in Table~\ref{tab:preprocessing}.
+
+\begin{table*}[t]
+\centering
+\caption{Preprocessing variants used in the project.}
+\label{tab:preprocessing}
+\begin{tabularx}{\textwidth}{lYY}
+\toprule
+Variant & Operations & Motivation \\
+\midrule
+\texttt{text\_light} &
+Lowercasing, tokenization, removal of non-informative punctuation while preserving financial tokens &
+Conservative baseline that keeps most domain-specific information. \\
+\texttt{text\_stopwords} &
+\texttt{text\_light} plus selective stop-word removal &
+Reduces noise and dimensionality while keeping finance- and sentiment-relevant words. \\
+\texttt{text\_stemming} &
+\texttt{text\_stopwords} plus Porter stemming &
+Aggressive normalization to reduce vocabulary size and test its effect on classical models. \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+The three variants isolate the effect of increasing preprocessing strength. The \texttt{text\_light} version is a conservative baseline preserving most lexical information; \texttt{text\_stopwords} tests whether removing frequent non-informative words helps sparse representations; \texttt{text\_stemming} tests whether a stronger vocabulary reduction helps, at the cost of interpretability. Each model can be trained on exactly the same three columns, allowing a controlled comparison.
+
+\subsection{Domain-Aware Choices}
+
+The light preprocessing keeps words, numbers, percentages, and financial symbols whenever possible. This follows directly from the EDA: more than half of the headlines contain numbers. For example, polarity may depend on whether profit increased or decreased; therefore numbers, percentages, currencies, and units such as \textit{EUR}, \textit{USD}, \textit{mn}, \textit{million}, and \textit{billion} were not removed.
+
+The stop-word variant removes common English stop words but preserves words important for sentiment, such as \textit{no}, \textit{not}, \textit{up}, \textit{down}, \textit{increase}, \textit{decrease}, \textit{rise}, \textit{fall}, \textit{higher}, \textit{lower}, \textit{profit}, \textit{loss}, and \textit{gain}. This avoids an overly mechanical strategy, since negation words can change the polarity of a sentence.
+
+\subsection{Stemming and Steps Not Applied}
+
+The stemming variant applies Porter stemming after stop-word removal, reducing the vocabulary from 10503 to 8285 terms while keeping the same number of tokens (Table~\ref{tab:prep-stats}). It was included as an aggressive baseline, not as an obviously superior method: it can reduce sparsity but makes tokens less interpretable and may distort financial terms (e.g.\ \textit{company} becomes \textit{compani}).
+
+\begin{table}[t]
+\centering
+\caption{Effect of preprocessing on token statistics.}
+\label{tab:prep-stats}
+\begin{tabular}{lrrr}
+\toprule
+Variant & Avg. tokens & Vocabulary & Tokens \\
+\midrule
+\texttt{text\_light} & 21.24 & 10751 & 102939 \\
+\texttt{text\_stopwords} & 13.46 & 10503 & 65218 \\
+\texttt{text\_stemming} & 13.46 & 8285 & 65218 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Some operations were intentionally not applied. Numbers, percentages, currencies, and financial units were preserved because they may express sentiment-bearing changes. Aggressive domain stop words (e.g.\ \textit{company}, \textit{sales}, \textit{profit}) were avoided because they are part of the financial signal. Lemmatization was not added as a separate variant, since stemming already provides an aggressive baseline. For transformer-based models, aggressive preprocessing is inappropriate because pretrained tokenizers are designed for raw text.
+
+\section{PMI-Based Word Similarity}
+\label{sec:pmi}
+
+\subsection{Method}
+
+For PMI-based word similarity, we constructed a word-word co-occurrence matrix. Each row corresponds to a target word and each column to a context word. The context window size was set to one, as required, so only the immediately preceding and following words were counted as context.
+
+From the co-occurrence counts, we computed pointwise mutual information:
+\[
+PMI(w,c) = \log_2 \frac{P(w,c)}{P(w)P(c)}
+= \log_2 \frac{\mathrm{count}(w,c)\cdot N}{\mathrm{count}(w)\,\mathrm{count}(c)},
+\]
+where \(N\) is the total number of observed co-occurrences. Each word was then represented as a sparse PMI vector over context words, and cosine similarity between PMI vectors retrieved the most similar words for ten randomly selected target terms. This follows the distributional hypothesis: words occurring in similar contexts tend to have related meanings. With a window of one, similarities capture local financial expressions rather than broad semantic similarity. No package was used to compute PMI or word similarity.
+
+\subsection{Rare Word Filtering}
+
+Before constructing the PMI matrix, words occurring fewer than five times were removed. PMI is sensitive to rare events: a single accidental co-occurrence involving rare words can produce a high PMI value. This filter makes the results more stable and interpretable. We used standard PMI rather than positive PMI because the task explicitly requested PMI-based vectors.
+
+\subsection{Results and Interpretation}
+
+Table~\ref{tab:pmi-results} reports the ten randomly selected target words (in bold) and their most similar words.
+
+\begin{table}[t]
+\centering
+\caption{PMI-based word similarity results.}
+\label{tab:pmi-results}
+\begin{tabularx}{\linewidth}{lY}
+\toprule
+Target word & Most similar words \\
+\midrule
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\textbf{TODO} & TODO \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The results should be interpreted as distributional similarity rather than direct synonymy. Since the context window is limited to the immediately adjacent words, PMI mainly captures local co-occurrence patterns. This is suitable for financial headlines, where recurring expressions such as \textit{net sales}, \textit{operating profit}, \textit{EUR mn}, and \textit{corresponding period} are common. A useful result is therefore not a list of synonyms, but a list of words that occur in similar financial contexts. Unexpected similarities can often be explained by the small corpus size, the narrow window, or rare co-occurrences. The PMI experiment confirms a key EDA finding: local context is important, as isolated words may be ambiguous while short neighboring expressions often determine the financial meaning.
+
+\section{Sentiment Classification}
+\label{sec:classification}
+
+This section builds classical classifiers for the sentiment task and analyses their behaviour. We train a Multinomial Naive Bayes (NB) classifier and a feed-forward neural network (a multilayer perceptron, MLP), each with two feature representations, and we study the effect of class imbalance, of dropping the neutral class, and of the typical errors. The aim, following the EDA, is not to maximise accuracy but to understand \emph{why} each modelling choice changes the results.
+
+\subsection{Setup}
+
+The dataset was split into 80\% training and 20\% test data with a stratified split (\texttt{random\_state=42}), which preserves the 59/28/12 class proportions in both parts. Stratification is important here because the negative class is only 12\% of the data: a non-stratified split could place too few negatives in the test set and make the metrics unstable. Features were built only from the training set (\texttt{fit} on train, \texttt{transform} on test) to avoid information leakage. We report accuracy, macro-averaged precision, recall and F1, and confusion matrices; as argued in the EDA, macro-F1 is the primary metric because accuracy is dominated by the majority class.
+
+We fixed the \texttt{text\_stopwords} preprocessing variant for the main grid after comparing it against the more aggressive \texttt{text\_stemming} variant on the Naive Bayes + BoW model. Stemming reduced the vocabulary (10503 to 8285 terms) but did not improve results --- macro-F1 was 0.65 versus 0.66 for \texttt{text\_stopwords} --- as the aggressive normalisation distorts financial terms (e.g.\ \textit{company} becomes \textit{compani}) without benefit. We therefore kept the lighter variant, which preserves finance- and sentiment-relevant words. The small difference also reinforces a finding repeated throughout: for these short headlines, preprocessing strength has limited impact because word presence already carries most of the signal.
+
+\subsection{Naive Bayes: Bag-of-Words vs.\ TF-IDF}
+
+We first compare two representations for Naive Bayes: bag-of-words counts (BoW) and TF-IDF. The training BoW matrix has 8733 features and is about 99.9\% sparse, consistent with the short headlines and large vocabulary found in the EDA. Table~\ref{tab:nb-rep} reports the results.
+
+\begin{table}[t]
+\centering
+\caption{Naive Bayes with two representations and with a uniform prior.}
+\label{tab:nb-rep}
+\begin{tabular}{lccccc}
+\toprule
+Configuration & Acc. & Macro-P & Macro-R & Macro-F1 & Neg.\ rec. \\
+\midrule
+NB + BoW                 & 0.72 & 0.69 & 0.64 & 0.66 & 0.53 \\
+NB + TF-IDF              & 0.68 & 0.73 & 0.45 & 0.45 & 0.06 \\
+NB + BoW (uniform prior) & 0.68 & 0.63 & 0.65 & 0.64 & 0.63 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Counter to the common assumption that TF-IDF is a stronger representation, it \emph{degraded} Naive Bayes sharply: macro-F1 fell from 0.66 to 0.45 and the recall on the negative class collapsed to 0.06. The mechanism is specific to NB, which scores a class as the product of a class prior and per-word likelihoods. TF-IDF down-weighting flattens the word-likelihood signal, so the high prior of the neutral class (0.59) dominates and the model defaults to predicting neutral. This illustrates the EDA warning that accuracy can be misleading: accuracy moved only slightly (0.72 to 0.68), while macro-F1 revealed that the model had effectively stopped predicting the minority classes.
+
+\subsection{Handling Class Imbalance}
+
+Because both representations showed the model collapsing toward the neutral majority, we tested an explicit imbalance correction. Naive Bayes has no \texttt{class\_weight} parameter, but setting \texttt{fit\_prior=False} replaces the data-estimated priors with a uniform prior, removing the majority-class advantage. With BoW (Table~\ref{tab:nb-rep}, last row), negative recall rose from 0.53 to 0.63 and the three classes became markedly more balanced (all F1-scores between 0.57 and 0.77), at the cost of a small drop in accuracy (0.72 to 0.68). Macro-F1 itself barely changed (0.66 to 0.64), because the gain on the rare classes offset the loss on neutral. The value of this correction is therefore not a higher headline score but a model that no longer ignores the minority class.
+
+\subsection{Feed-forward Neural Network}
+
+We then trained an MLP (one hidden layer of 100 ReLU units, Adam, \texttt{max\_iter=200}, \texttt{random\_state=42}; roughly 876{,}000 parameters) on the same representations. Table~\ref{tab:grid} places all four model$\times$representation combinations side by side.
+
+\begin{table}[t]
+\centering
+\caption{Macro-F1 for the full classifier $\times$ representation grid.}
+\label{tab:grid}
+\begin{tabular}{lcc}
+\toprule
+ & BoW & TF-IDF \\
+\midrule
+Naive Bayes      & 0.66 & 0.45 \\
+Neural network   & 0.67 & 0.65 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two findings stand out. First, with BoW the neural network only \emph{matched} Naive Bayes (macro-F1 0.67 vs.\ 0.66), despite its much larger capacity and its ability to model word interactions. This indicates that for these short headlines word \emph{presence} is nearly sufficient and word \emph{interactions} add little: knowing whether words such as \textit{loss}, \textit{profit}, or \textit{growth} are present already captures most of the signal. Second, and more interestingly, TF-IDF devastated Naive Bayes (0.45) but left the neural network almost unaffected (0.65; negative recall 0.54 vs.\ NB's 0.06). The reason is that the neural network has no class prior to be overwhelmed --- it learns its weights directly by gradient descent. This shows that representation effects are \emph{not absolute}: they interact with the classifier. A study that ran only NB with TF-IDF would have wrongly concluded that ``TF-IDF is worse''; running the full grid reveals that TF-IDF is worse \emph{for Naive Bayes specifically}.
+
+\subsection{Error Analysis}
+
+We examined the misclassified test examples of the best multiclass model (NN + BoW, 267 errors out of 970). The confusion matrices (Figure~\ref{fig:cm-nb}) show that errors are overwhelmingly confusions with the neutral class rather than polarity flips: positives and negatives are rarely confused with each other, but both are often predicted as neutral. The difficulty is therefore separating weak sentiment from neutral reporting, not telling positive from negative.
+
+Reading the most frequent error type --- true positives predicted as neutral --- reveals a consistent pattern: these headlines contain almost no overtly positive \emph{words}. We group the failures into four categories:
+
+\begin{itemize}
+  \item \textbf{Sentiment in events/numbers:} e.g.\ ``\textit{subscriptions increase Cargotec's share capital\dots}'' or ``\textit{awarded a significant order for 292 cranes}''. The signal is the financial event (a capital increase, a won contract), not a sentiment word.
+  \item \textbf{Implicit/connotative:} e.g.\ ``\textit{moving to new headquarters signifies the beginning of a new era}''. Positive by implication, with no positive keywords.
+  \item \textbf{Negation / polarity reversal:} e.g.\ ``\textit{Stora Enso\dots was acquitted of charges of participating in a price-fixing conspiracy}''. The sentence is full of negative words; \textit{acquitted} reverses them, but bag-of-words ignores word order.
+  \item \textbf{Domain knowledge required:} e.g.\ being listed among ``\textit{sustainable / pioneer companies}'' is an honour that requires world knowledge to read as positive.
+\end{itemize}
+
+These categories are a direct consequence of the data properties found in the EDA --- short, domain-specific headlines where sentiment is often implicit --- and of the bag-of-words assumption that discards word order. They also motivate the transformer experiments in Section~\ref{sec:transformers}: each failure mode (word order for negation, world knowledge for events, context for connotation) is something a pretrained contextual model is designed to capture.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.49\linewidth]{figures/Naive_Bayes___BoW.png}
+\includegraphics[width=0.49\linewidth]{figures/Neural_Net___BoW.png}
+\caption{Confusion matrices (multiclass, BoW): Naive Bayes (left) and neural network (right). Both confuse positives and negatives with the neutral majority rather than with each other.}
+\Description{Two 3x3 confusion matrices showing most off-diagonal mass in the neutral column.}
+\label{fig:cm-nb}
+\end{figure}
+
+\subsection{Binary vs.\ Multiclass}
+
+Finally, we repeated the task in a binary setting by removing the neutral class (1967 headlines, positive 69\% / negative 31\%). Removing neutral also reduces the imbalance: the negative class rises from 12\% of the data to 31\%. Table~\ref{tab:binary} compares both settings.
+
+\begin{table}[t]
+\centering
+\caption{Macro-F1 in the multiclass and binary settings.}
+\label{tab:binary}
+\begin{tabular}{lcc}
+\toprule
+Model & Multiclass & Binary \\
+\midrule
+NB + BoW & 0.66 & 0.81 \\
+NN + BoW & 0.67 & 0.83 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both models improve substantially (macro-F1 about $+0.15$), and negative recall recovers strongly (NB 0.53 to 0.70, NN 0.57 to 0.74). The interpretation matters more than the numbers: every error category above was a confusion \emph{with neutral}, so deleting the neutral class removes precisely the dominant failure mode. What remains --- separating positive from negative --- is the part bag-of-words already handled well. The $\sim$0.15 gain therefore quantifies how much of the multiclass difficulty was due to the neutral class alone: the binary setting removes the hard part, not the easy part. The relative behaviour of the two models is unchanged (the neural network again only marginally beats Naive Bayes), confirming that for this dataset word presence is nearly sufficient and a simple, interpretable, instantly-trained Naive Bayes is a strong and arguably preferable baseline.
+
+\section{Pre-trained Language Models}
+\label{sec:transformers}
+
+The error analysis of the classical models identified failure modes --- negation, implicit sentiment, financial events, and required world knowledge --- that bag-of-words representations cannot capture because they discard word order and have no prior knowledge of language. In this section we fine-tune a pretrained transformer designed precisely to address these limitations, and compare it to the classical baselines.
+
+\subsection{Model and Training Setup}
+
+We fine-tuned \texttt{distilbert-base-uncased}, a compact (about 67M parameters) distilled version of BERT, using its own subword tokenizer. Unlike the classical models, the transformer was applied to the \emph{raw} headlines rather than the preprocessed variants: aggressive cleaning such as stemming or stop-word removal would discard information the pretrained tokenizer expects, since the model was pretrained on natural English text. We used the same 80/20 stratified split and seed (42) as in Section~\ref{sec:classification} so that results are directly comparable. Sequences were truncated/padded to a maximum length of 128 tokens, which comfortably covers the headlines given the maximum length of about 100 tokens found in the EDA. Training used 3 epochs, a batch size of 16, and a small learning rate of $2\times10^{-5}$. A small learning rate is important when fine-tuning: it adapts the model to the financial domain while preserving the knowledge acquired during pretraining, rather than overwriting it. Fine-tuning was performed on a free Google Colab T4 GPU.
+
+\subsection{Multiclass Results and Comparison}
+
+Table~\ref{tab:transformer-multi} compares the fine-tuned transformer with the best classical models in the multiclass setting.
+
+\begin{table}[t]
+\centering
+\caption{Multiclass results: classical models vs.\ DistilBERT.}
+\label{tab:transformer-multi}
+\begin{tabular}{lccc}
+\toprule
+Model & Accuracy & Macro-F1 & Neg.\ recall \\
+\midrule
+NB + BoW   & 0.72 & 0.66 & 0.53 \\
+NN + BoW   & 0.72 & 0.67 & 0.57 \\
+DistilBERT & 0.82 & 0.81 & 0.86 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The fine-tuned transformer raised macro-F1 from 0.67 to 0.81, a substantial gain of $+0.14$. Crucially, the improvement is concentrated exactly where the classical models failed: recall on the negative class rose from 0.53 to 0.86, and recall on the positive class from 0.55 to 0.79. The confusion of true positives with the neutral class --- the dominant classical error, with 109 such cases for Naive Bayes --- dropped to 50. The transformer therefore does not just score higher; it repairs the specific failure modes documented in the error analysis. Reading word order lets it handle negation such as \textit{acquitted}; pretrained world knowledge lets it recognise that a won contract or a capital increase is positive; and contextual embeddings capture implicit, connotative sentiment such as ``a new era''. This confirms that contextual, pretrained representations capture sentiment that bag-of-words counting cannot.
+
+\subsection{Binary Results}
+
+We also evaluated the transformer in the binary setting (neutral removed). Table~\ref{tab:transformer-all} summarises every model in both settings.
+
+\begin{table}[t]
+\centering
+\caption{Macro-F1 of all models in both settings.}
+\label{tab:transformer-all}
+\begin{tabular}{lcc}
+\toprule
+Model & Multiclass & Binary \\
+\midrule
+NB + BoW   & 0.66 & 0.81 \\
+NN + BoW   & 0.67 & 0.83 \\
+DistilBERT & 0.81 & 0.95 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In the binary setting the transformer reached a macro-F1 of 0.95, with only 18 errors out of 394 test headlines and a negative recall of 0.95 (compared with 0.53 for Naive Bayes in the multiclass setting). The validation macro-F1 stabilised after one to two epochs and dipped slightly at the third, indicating that three epochs is already sufficient and that further training would risk mild overfitting. The two effects studied in this project therefore compound: removing the neutral class and using a pretrained contextual model each help, and together they yield near-ceiling performance.
+
+\subsection{Computational Cost}
+
+These gains come at a clear computational cost. Naive Bayes trains in under a second on a CPU and is fully interpretable through its per-word likelihoods; the neural network trains in seconds. The transformer, with about 67M parameters, required a GPU: three epochs took roughly one minute on a Colab T4, but would take far longer on CPU, and the model is essentially a black box. For a deployment that values transparency, speed, or limited hardware, the classical models remain attractive; the transformer is justified when maximising performance on difficult, context-dependent cases is the priority.
+
+\section{Conclusion}
+
+This project showed that methodological choices matter more than raw scores. The EDA revealed a strongly imbalanced, short, domain-specific dataset, which made macro-F1 and confusion matrices essential and motivated domain-aware preprocessing. The classification experiments demonstrated that representation effects interact with the classifier: TF-IDF collapsed Naive Bayes but not the neural network, and a high-capacity network barely outperformed simple word counting, indicating that word presence is nearly sufficient for these headlines. The error analysis traced the remaining failures to negation, implicit sentiment, and required domain knowledge. Fine-tuning DistilBERT addressed exactly these failures, improving macro-F1 from 0.67 to 0.81 (multiclass) and reaching 0.95 in the binary setting, at the cost of higher computation and lower interpretability. The clearest single lesson is that the central difficulty of the task was not distinguishing positive from negative, but separating genuine sentiment from neutral financial reporting.
+
+\end{document}
